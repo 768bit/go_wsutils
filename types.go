@@ -194,6 +194,37 @@ func NewWebSocketHttpResponseBody(statusCode int, seshKey string, requestID stri
 
 }
 
+func NewWebSocketRPCResponseBody(statusCode int, seshKey string, requestID string, cmd string, payload interface{}) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: RPCMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Cmd:         method,
+		Payload:     payload,
+	}
+
+}
+
+func NewWebSocketRPCErrorResponseBody(statusCode int, seshKey string, requestID string, cmd string, payload interface{}, err error) *WebSocketResponseBody {
+
+	if statusCode <= RPCStatusOK {
+		statusCode = RPCStatusError
+	}
+
+	return &WebSocketResponseBody{
+		MessageType: RPCMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Cmd:         method,
+		Payload:     payload,
+		Errors:      []error{err},
+	}
+
+}
+
 type WSRequest struct {
 	requestID       string
 	requestBody     *WebSocketRequestBody
