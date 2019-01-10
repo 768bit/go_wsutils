@@ -1,7 +1,8 @@
 package go_wsutils
 
 import (
-	"errors"
+	"context"
+	"github.com/768bit/websocket"
 	"time"
 )
 
@@ -68,7 +69,7 @@ func NewWebSocketSessionStartErrorResponseBody(requestID string, status int, err
 		MessageType: RPCSessionStartErrorMessage,
 		ID:          requestID,
 		StatusCode:  status,
-		Errors:      []error{err},
+		Errors:      []string{err.Error()},
 	}
 
 }
@@ -101,7 +102,7 @@ func NewWebSocketSessionEndErrorResponseBody(requestID string, seshKey string, s
 		ID:          requestID,
 		StatusCode:  status,
 		SeshKey:     seshKey,
-		Errors:      []error{err},
+		Errors:      []string{err.Error()},
 	}
 
 }
@@ -111,6 +112,10 @@ const (
 	RPCSessionStartMessage      = 0x01
 	RPCSessionEndMessage        = 0x04
 	RPCMessage                  = 0x20
+	RPCStatusMessage            = 0x22
+	SubscribeMessage            = 0x30
+	PublishMessage              = 0x31
+	UnSubscribeMessage          = 0x32
 	HTTPMessage                 = 0x40
 	ByteSessionStartMessage     = 0xB0
 	ByteSessionEndMessage       = 0xB4
@@ -133,12 +138,55 @@ type WebSocketRequestBody struct {
 	Method      string                 `json:"method,omitEmpty"`
 	Path        string                 `json:"path,omitEmpty"`
 	ModuleURI   string                 `json:"moduleURI,omitEmpty"`
+	Topic       string                 `json:"topic,omitEmpty"`
 	ID          string                 `json:"id,omitEmpty"`
 	SeshKey     string                 `json:"seshKey,omitEmpty"`
 	Headers     map[string]string      `json:"headers,omitEmpty"`
 	Payload     map[string]interface{} `json:"payload,omitEmpty"`
 	Options     map[string]interface{} `json:"options,omitEmpty"`
 	StatusCode  int                    `json:"statusCode,omitEmpty"`
+	ctx         context.Context        `json:"-"`
+	conn        *websocket.Conn        `json:"-"`
+	UserUUID    string                 `json:"-"`
+	JWTTicketID string                 `json:"-"`
+	SessionID   string                 `json:"-"`
+}
+
+func (rb *WebSocketRequestBody) SetSessionDetails(sessionID string, userUUID string, jwtTicketID string) *WebSocketRequestBody {
+
+	rb.UserUUID = userUUID
+	rb.JWTTicketID = jwtTicketID
+	rb.SessionID = sessionID
+	return rb
+
+}
+
+func (rb *WebSocketRequestBody) SetConn(conn *websocket.Conn) *WebSocketRequestBody {
+
+	rb.conn = conn
+	return rb
+
+}
+
+func (rb *WebSocketRequestBody) CreateContext() *WebSocketRequestBody {
+
+	rb.ctx = context.Background()
+	return rb
+
+}
+
+func (rb *WebSocketRequestBody) GetContext() context.Context {
+
+	return rb.ctx
+
+}
+
+func (rb *WebSocketRequestBody) SendStatusPayload(statusCode int, payload interface{}) error {
+
+	stat := NewWebSocketRPCStatusBody(statusCode, rb.SeshKey, rb.ID, rb.Cmd, payload)
+
+	return SendJSONMessage(rb.conn, stat)
+
 }
 
 type WebSocketResponseBody struct {
@@ -147,13 +195,14 @@ type WebSocketResponseBody struct {
 	Method      string                 `json:"method,omitEmpty"`
 	Path        string                 `json:"path,omitEmpty"`
 	ModuleURI   string                 `json:"moduleURI,omitEmpty"`
+	Topic       string                 `json:"topic,omitEmpty"`
 	ID          string                 `json:"id,omitEmpty"`
 	SeshKey     string                 `json:"seshKey,omitEmpty"`
 	Headers     map[string]string      `json:"headers,omitEmpty"`
 	Payload     map[string]interface{} `json:"payload,omitEmpty"`
 	Options     map[string]interface{} `json:"options,omitEmpty"`
 	StatusCode  int                    `json:"statusCode,omitEmpty"`
-	Errors      []error                `json:"errors,omitEmpty"`
+	Errors      []string               `json:"errors,omitEmpty"`
 }
 
 func NewBasicWebSocketResponseBody(statusCode int, requestID string, payload interface{}) *WebSocketResponseBody {
@@ -201,13 +250,26 @@ func NewWebSocketRPCResponseBody(statusCode int, seshKey string, requestID strin
 		StatusCode:  statusCode,
 		SeshKey:     seshKey,
 		ID:          requestID,
-		Cmd:         method,
-		Payload:     payload,
+		Cmd:         cmd,
+		Payload:     map[string]interface{}{"response": payload},
 	}
 
 }
 
-func NewWebSocketRPCErrorResponseBody(statusCode int, seshKey string, requestID string, cmd string, payload interface{}, err error) *WebSocketResponseBody {
+func NewWebSocketRPCStatusBody(statusCode int, seshKey string, requestID string, cmd string, payload interface{}) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: RPCStatusMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Cmd:         cmd,
+		Payload:     map[string]interface{}{"status": payload},
+	}
+
+}
+
+func NewWebSocketRPCErrorResponseBody(statusCode int, seshKey string, requestID string, cmd string, payload interface{}, err string) *WebSocketResponseBody {
 
 	if statusCode <= RPCStatusOK {
 		statusCode = RPCStatusError
@@ -218,9 +280,75 @@ func NewWebSocketRPCErrorResponseBody(statusCode int, seshKey string, requestID 
 		StatusCode:  statusCode,
 		SeshKey:     seshKey,
 		ID:          requestID,
-		Cmd:         method,
-		Payload:     payload,
-		Errors:      []error{err},
+		Cmd:         cmd,
+		Payload:     map[string]interface{}{"response": payload},
+		Errors:      []string{err},
+	}
+
+}
+
+func NewWebSocketSubscribeResponseBody(statusCode int, seshKey string, requestID string, topic string) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: SubscribeMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Topic:       topic,
+		Payload:     map[string]interface{}{},
+	}
+
+}
+
+func NewWebSocketSubscribeErrorResponseBody(statusCode int, seshKey string, requestID string, topic string, err string) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: SubscribeMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Topic:       topic,
+		Payload:     map[string]interface{}{},
+		Errors:      []string{err},
+	}
+
+}
+
+func NewWebSocketUnSubscribeResponseBody(statusCode int, seshKey string, requestID string, topic string) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: UnSubscribeMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Topic:       topic,
+		Payload:     map[string]interface{}{},
+	}
+
+}
+
+func NewWebSocketUnSubscribeErrorResponseBody(statusCode int, seshKey string, requestID string, topic string, err string) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: UnSubscribeMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		ID:          requestID,
+		Topic:       topic,
+		Payload:     map[string]interface{}{},
+		Errors:      []string{err},
+	}
+
+}
+
+func NewWebSocketPublishBody(statusCode int, seshKey string, topic string, payload interface{}) *WebSocketResponseBody {
+
+	return &WebSocketResponseBody{
+		MessageType: PublishMessage,
+		StatusCode:  statusCode,
+		SeshKey:     seshKey,
+		Topic:       topic,
+		Payload:     map[string]interface{}{"publish": payload},
 	}
 
 }
@@ -238,7 +366,7 @@ type WSRequest struct {
 	Done            chan bool
 	Progress        chan *WSRequestProgress
 	Response        chan *WebSocketResponseBody
-	Errors          []error
+	Errors          []string
 }
 
 func NewBasicWSRequest(requestID string, requestBody *WebSocketRequestBody) *WSRequest {
@@ -250,7 +378,7 @@ func NewBasicWSRequest(requestID string, requestBody *WebSocketRequestBody) *WSR
 		Done:        make(chan bool),
 		Progress:    make(chan *WSRequestProgress),
 		Response:    make(chan *WebSocketResponseBody),
-		Errors:      []error{},
+		Errors:      []string{},
 	}
 
 }
@@ -265,7 +393,7 @@ func NewWSRequest(requestID string, seshKey string, requestBody *WebSocketReques
 		Done:        make(chan bool),
 		Progress:    make(chan *WSRequestProgress),
 		Response:    make(chan *WebSocketResponseBody),
-		Errors:      []error{},
+		Errors:      []string{},
 	}
 
 }
@@ -282,7 +410,7 @@ func NewWSRequestWithTimeout(requestID string, seshKey string, requestBody *WebS
 		Response:     make(chan *WebSocketResponseBody),
 		Timeout:      timeout,
 		timeoutTimer: time.NewTimer(time.Duration(timeout) * time.Second),
-		Errors:       []error{},
+		Errors:       []string{},
 	}
 
 }
@@ -299,7 +427,7 @@ func NewWSRequestWithAckTimeout(requestID string, seshKey string, requestBody *W
 		Response:        make(chan *WebSocketResponseBody),
 		AckTimeout:      ackTimeout,
 		ackTimeoutTimer: time.NewTimer(time.Duration(ackTimeout) * time.Second),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -318,7 +446,7 @@ func NewWSRequestWithAckTimeoutAndTimeout(requestID string, seshKey string, requ
 		ackTimeoutTimer: time.NewTimer(time.Duration(ackTimeout) * time.Second),
 		Timeout:         timeout,
 		timeoutTimer:    time.NewTimer(time.Duration(timeout) * time.Second),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -333,7 +461,7 @@ func NewWSHttpRequest(requestID string, seshKey string, httpRequestBody *WebSock
 		Done:            make(chan bool),
 		Progress:        make(chan *WSRequestProgress),
 		Response:        make(chan *WebSocketResponseBody),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -350,7 +478,7 @@ func NewWSHttpRequestWithTimeout(requestID string, seshKey string, httpRequestBo
 		Response:        make(chan *WebSocketResponseBody),
 		Timeout:         timeout,
 		timeoutTimer:    time.NewTimer(time.Duration(timeout) * time.Second),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -367,7 +495,7 @@ func NewWSHttpRequestWithAckTimeout(requestID string, seshKey string, httpReques
 		Response:        make(chan *WebSocketResponseBody),
 		AckTimeout:      ackTimeout,
 		ackTimeoutTimer: time.NewTimer(time.Duration(ackTimeout) * time.Second),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -386,7 +514,7 @@ func NewWSHttpRequestWithAckTimeoutAndTimeout(requestID string, seshKey string, 
 		ackTimeoutTimer: time.NewTimer(time.Duration(ackTimeout) * time.Second),
 		Timeout:         timeout,
 		timeoutTimer:    time.NewTimer(time.Duration(timeout) * time.Second),
-		Errors:          []error{},
+		Errors:          []string{},
 	}
 
 }
@@ -397,7 +525,7 @@ func (wsr *WSRequest) CancelRequest() {
 
 	//add cancelled error to stack... response will be a payload signifying it
 
-	wsr.Errors = append(wsr.Errors, errors.New("Request was cancelled."))
+	wsr.Errors = append(wsr.Errors, "Request was cancelled.")
 	close(wsr.Progress)
 
 	wsr.Done <- false

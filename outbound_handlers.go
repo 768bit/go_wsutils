@@ -3,7 +3,6 @@ package go_wsutils
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"github.com/768bit/websocket"
 	"github.com/google/uuid"
 )
@@ -41,7 +40,7 @@ func SendJSONRequest(requestID string, conn *websocket.Conn, payload interface{}
 
 		if sendErr := conn.WriteMessage(websocket.TextMessage, encMsg); err != nil {
 
-			req.Errors = append(req.Errors, sendErr)
+			req.Errors = append(req.Errors, sendErr.Error())
 
 			req.Done <- false
 
@@ -53,8 +52,8 @@ func SendJSONRequest(requestID string, conn *websocket.Conn, payload interface{}
 
 	} else {
 
-		req.Errors = append(req.Errors, errors.New("Error marshalling payload to JSON"))
-		req.Errors = append(req.Errors, err)
+		req.Errors = append(req.Errors, "Error marshalling payload to JSON")
+		req.Errors = append(req.Errors, err.Error())
 
 		req.Done <- false
 
